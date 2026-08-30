@@ -260,6 +260,8 @@ const BASE_DATA = {"DAX":{"label":"DAX 40","color":"#fbbf24","sessions":{"2026-0
 
 const API_KEY = '28bddb71b6364a1c8d0ce3a6fd7cbbb7';
 
+
+
 const IDX_CFG = {
   DAX: {label:'DAX 40',     color:'#fbbf24', symbol:'DAX',  exchange:'XETR',   threshold:30, open_h:8,  open_m:0,  close_h:16, close_m:30},
   NQ:  {label:'Nasdaq 100', color:'#00d4ff', symbol:'NDX',  exchange:'NASDAQ', threshold:30, open_h:14, open_m:30, close_h:21, close_m:0},
@@ -274,8 +276,32 @@ const MONTHS_ES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Ago
 // ════════════════════════════════════════════════════════════
 let ALL_DATA = {};
 
-function loadData() {
+async function loadData() {
   try {
+    // Cargar desde GitHub via Worker (fuente permanente)
+    showLoading('Cargando datos...');
+    let ghData = null;
+    try {
+      const resp = await fetch('https://yahoo-proxy.alvarojbonny.workers.dev?action=load');
+      if (resp.ok) ghData = await resp.json();
+    } catch(e) { console.warn('No se pudo cargar de GitHub:', e); }
+    hideLoading();
+
+    if (ghData && !ghData.error) {
+      ALL_DATA = ghData;
+      for (const idx of IDX_LIST) {
+        if (!ALL_DATA[idx]) ALL_DATA[idx] = BASE_DATA[idx] || {label:IDX_CFG[idx].label, color:IDX_CFG[idx].color, sessions:{}};
+        if (BASE_DATA[idx]) {
+          for (const [date, sess] of Object.entries(BASE_DATA[idx].sessions || {})) {
+            if (!ALL_DATA[idx].sessions[date]) ALL_DATA[idx].sessions[date] = sess;
+          }
+        }
+      }
+      document.getElementById('update-date').textContent = 'Datos cargados desde GitHub';
+      return;
+    }
+
+    // Fallback: localStorage
     const saved = localStorage.getItem('retorno_open_data');
     if (saved) {
       ALL_DATA = JSON.parse(saved);
@@ -301,13 +327,25 @@ function loadData() {
   }
 }
 
-function saveData() {
+async function saveData() {
   try {
     localStorage.setItem('retorno_open_data', JSON.stringify(ALL_DATA));
     const now = new Date().toLocaleString('es-ES');
     localStorage.setItem('retorno_open_lastupdate', now);
-    document.getElementById('update-date').textContent = 'Última actualización: ' + now;
-  } catch(e) { console.error('Error guardando datos:', e); }
+    document.getElementById('update-status').textContent = '💾 Guardando en GitHub...';
+    // Guardar via Worker (el token está seguro en Cloudflare)
+    const resp = await fetch('https://yahoo-proxy.alvarojbonny.workers.dev?action=save', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({data: ALL_DATA})
+    });
+    const result = await resp.json();
+    if (result.ok) {
+      document.getElementById('update-date').textContent = '✅ Guardado en GitHub · ' + now;
+    } else {
+      document.getElementById('update-date').textContent = '⚠️ Solo guardado en local · ' + now;
+    }
+  } catch(e) { console.error('Error guardando:', e); }
 }
 
 // ════════════════════════════════════════════════════════════
@@ -394,7 +432,7 @@ async function actualizarDatos() {
       showLoading(`Descargando ${idxCfg.label}...`);
 
       // Descargar últimos 60 días
-      const url = `${WORKER}?symbol=${encodeURIComponent(cfg.yahoo)}&interval=5m&range=60d`;
+      const url = `${WORKER}?action=proxy&symbol=${encodeURIComponent(cfg.yahoo)}&interval=5m&range=60d`;
       let resp;
       try {
         resp = await fetch(url);
@@ -1156,8 +1194,7 @@ function renderAll(){
 // ════════════════════════════════════════════════════════════
 // INIT
 // ════════════════════════════════════════════════════════════
-loadData();
-renderAll();
+loadData().then(() => renderAll());
 </script>
 </body>
 </html>
