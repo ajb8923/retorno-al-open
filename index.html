@@ -1,4 +1,4 @@
-<!DOCTYPE html> 
+<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
@@ -280,15 +280,26 @@ async function loadData() {
   try {
     // Cargar desde GitHub via Worker (fuente permanente)
     showLoading('Cargando datos...');
-    let ghData = null;
-    try {
-      const resp = await fetch('https://yahoo-proxy.alvarojbonny.workers.dev?action=load');
-      if (resp.ok) ghData = await resp.json();
-    } catch(e) { console.warn('No se pudo cargar de GitHub:', e); }
+    // Cargar cada índice desde su archivo separado
+    let loadedAny = false;
+    for (const idx of IDX_LIST) {
+      try {
+        const resp = await fetch('https://yahoo-proxy.alvarojbonny.workers.dev?action=load&file=datos_' + idx + '.json');
+        if (resp.ok) {
+          const idxData = await resp.json();
+          if (idxData && !idxData.error) {
+            if (!ALL_DATA[idx]) ALL_DATA[idx] = {label:IDX_CFG[idx].label, color:IDX_CFG[idx].color, sessions:{}};
+            // Fusionar con datos guardados
+            ALL_DATA[idx] = idxData;
+            loadedAny = true;
+          }
+        }
+      } catch(e) { console.warn('No se pudo cargar ' + idx + ' de GitHub:', e); }
+    }
     hideLoading();
 
-    if (ghData && !ghData.error) {
-      ALL_DATA = ghData;
+    if (loadedAny) {
+      // Fusionar con datos base
       for (const idx of IDX_LIST) {
         if (!ALL_DATA[idx]) ALL_DATA[idx] = BASE_DATA[idx] || {label:IDX_CFG[idx].label, color:IDX_CFG[idx].color, sessions:{}};
         if (BASE_DATA[idx]) {
@@ -329,23 +340,39 @@ async function loadData() {
 
 async function saveData() {
   try {
+    // Guardar en localStorage como caché
     localStorage.setItem('retorno_open_data', JSON.stringify(ALL_DATA));
     const now = new Date().toLocaleString('es-ES');
     localStorage.setItem('retorno_open_lastupdate', now);
     document.getElementById('update-status').textContent = '💾 Guardando en GitHub...';
-    // Guardar via Worker (el token está seguro en Cloudflare)
-    const resp = await fetch('https://yahoo-proxy.alvarojbonny.workers.dev?action=save', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({data: ALL_DATA})
-    });
-    const result = await resp.json();
-    if (result.ok) {
+
+    // Guardar cada índice en un archivo separado (más pequeño)
+    let allOk = true;
+    for (const idx of IDX_LIST) {
+      const idxData = ALL_DATA[idx];
+      if (!idxData) continue;
+
+      const jsonStr = JSON.stringify(idxData);
+      const resp = await fetch('https://yahoo-proxy.alvarojbonny.workers.dev?action=save&file=datos_' + idx + '.json', {
+        method: 'POST',
+        headers: {'Content-Type': 'text/plain'},
+        body: jsonStr
+      });
+
+      if (!resp.ok) { allOk = false; continue; }
+      const result = await resp.json();
+      if (!result.ok) allOk = false;
+    }
+
+    if (allOk) {
       document.getElementById('update-date').textContent = '✅ Guardado en GitHub · ' + now;
     } else {
-      document.getElementById('update-date').textContent = '⚠️ Solo guardado en local · ' + now;
+      document.getElementById('update-date').textContent = '⚠️ Error parcial al guardar · ' + now;
     }
-  } catch(e) { console.error('Error guardando:', e); }
+  } catch(e) {
+    console.error('Error guardando:', e);
+    document.getElementById('update-date').textContent = '⚠️ Error al guardar: ' + e.message;
+  }
 }
 
 // ════════════════════════════════════════════════════════════
